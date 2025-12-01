@@ -1,0 +1,2 @@
+# Intrusion-Detection-Benchmarking-on-SDN-Net-Dataset
+Intrusion Detection Benchmarking on SDN-Net Dataset provides implementation and evaluation of 12 classifiers for intrusion detection on flow-level traffic. Models include Random Forest, Decision Tree, KNN, Naïve Bayes, SVM, Gradient Boosting, RNN, CNN, MLP, SGD, LR, and Autoencoder. Code is organized for reproducible benchmarking on SDN-Net flows.
