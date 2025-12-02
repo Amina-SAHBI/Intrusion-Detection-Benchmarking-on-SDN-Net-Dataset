@@ -15,7 +15,7 @@ This repository contains the code used to reproduce all benchmarking experiments
 
 ## Tools & Dependencies
 - Python, TensorFlow/Keras, and scikit-learn
-- Install dependencies via: `pip install -r requirements.txt`
+- Install dependencies
 
 ## Experiment Scenarios Replicated
 The 12 classifiers are tested under 7 dataset configurations described in the manuscript: unbalanced flows, SMOTE-balanced data, SMOTE-Tomek hybrid, and feature selection using Information Gain and Random Forest methods.
