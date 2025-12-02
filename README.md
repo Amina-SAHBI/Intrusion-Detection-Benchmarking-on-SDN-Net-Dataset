@@ -74,3 +74,49 @@ Every model evaluation displays:
 ## 📁 Repository Structure
 
 ### Branch: `binary/`
+binary/
+├── rf_binary.py
+├── dt_binary.py
+├── lr_binary.py
+├── gb_binary.py
+├── knn_binary.py
+├── gnb_binary.py
+├── sgd_binary.py
+└── svm_binary.py
+
+├── cnn_binary.py
+├── rnn_binary.py
+├── perceptron_binary.py
+└── autoencoder_binary.py
+
+### Branch: `multiclass/`
+multiclass/
+├── rf_multiclass.py
+├── dt_multiclass.py
+├── lr_multiclass.py
+├── gb_multiclass.py
+├── knn_multiclass.py
+├── gnb_multiclass.py
+├── sgd_multiclass.py
+└── svm_multiclass.py
+
+├── cnn_multiclass.py
+├── rnn_multiclass.py
+├── perceptron_multiclass.py
+└── autoencoder_multiclass.py
+
+
+> ** both branches contain the same classifiers, and **each script runs 7 pipeline variants inside it**.
+
+### 📦 Install dependencies
+```bash
+pip install pandas numpy scikit-learn imbalanced-learn matplotlib seaborn joblib imblearn
+
+python <file>.py --csv ../SDN-Net.csv --k 30
+📜 License
+This work is shared under the MIT License for open research usage.
+You may reuse, adapt and redistribute the code while keeping credit and citation.
+
+✨ Conclusion
+
+The objective of this repository is to support research conclusions that are not tied to one classifier or one feature space, but validated through multiple pipelines and learning families. This ensures stronger reliability for intrusion detection in centralized, programmable SDN/NFV traffic.
