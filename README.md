@@ -1,3 +1,70 @@
+
+
+
+# 🛡️ SDN-Net Intrusion Detection Benchmarking
+
+A benchmarking framework for **flow-level intrusion detection in SDN/NFV networks**, evaluated across:
+- **2 branches:** `Binary` and `Multi-Class`
+- **12 classifiers per branch:** 8 ML + 4 DL
+- **7 pipeline variants in each experiment file**
+- **Parallel evaluation on both Binary and Multi-Class tracks**
+
+---
+
+## 🎯 Purpose of the 7-Variant Pipelines
+Each classifier is trained **7 times under different data and feature-space configurations** to analyze:
+- the effect of **class imbalance**
+- the sensitivity to **noisy or redundant features**
+- the reliability of **decision boundaries**
+- the stability of models under **synthetic sampling shifts**
+
+🔬 *This design prevents conclusions that are tied to a single data condition or feature view.*
+
+---
+
+## 🧠 Why ML & DL Diversity?
+We include multiple learning philosophies to observe how SDN flow behavior is captured differently:
+- **ML (8 algos):** rule-based, ensemble, linear, margin-based, neighborhood, probabilistic, scalable learners
+- **DL (4 archs):** spatial feature abstraction (CNN), temporal flow learning (RNN), neural baseline, anomaly reconstruction (Auto-Encoder)
+
+✅ *Broad coverage ensures findings are usable for research decisions and real network-security insights.*
+
+---
+
+## 📊 Metrics Displayed for Each Variant
+Every pipeline outputs **inline results** including:
+- Accuracy, Precision, Recall, F1-Score
+- Confusion Matrix (heatmap)
+- ROC Curve & AUC (when supported)
+- Classification Report
+- Learning Curve (accuracy proxy for convergence and capacity trends)
+
+---
+
+## 📁 Branch Structure
+
+### `Binary/` and `Multi-Class/` contain the same classifier list:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # AI-Driven SDN/NFV Intrusion Detection Benchmarking
   # Binary & Multi-Class Pipelines with Extensive ML/DL Evaluation
 
