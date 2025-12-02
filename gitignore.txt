@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+venv/
+.env
+.env.*
+pip-wheel-metadata/
+
+# Data and outputs
+data/
+outputs/
+*.csv
+*.zip
+*.tar.gz
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Mac/Windows
+.DS_Store
+Thumbs.db
