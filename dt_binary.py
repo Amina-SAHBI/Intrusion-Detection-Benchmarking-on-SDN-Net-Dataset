@@ -2,10 +2,6 @@
 """
 dt_binary.py
 
-Variant of sdn_7_models_dt_display with algorithm name labeled in each model result.
-This makes it explicit (e.g. "DecisionTree") in prints, plot titles and the final summary,
-so you can later swap the classifier and keep clear records.
-
 Features:
  - Runs the same 7 experiment variants (Unbalanced, RF-FS, IG-FS, SMOTE, SMOTE+RF-FS, SMOTE+IG-FS, SMOTE-Tomek)
  - Displays classification report, confusion matrix and ROC inline for each variant
