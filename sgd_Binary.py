@@ -1,32 +1,33 @@
 #!/usr/bin/env python3
 """
-dt_binary.py
+sgd_binary.py
 
-Variant of sdn_7_models_dt_display with algorithm name labeled in each model result.
-This makes it explicit (e.g. "DecisionTree") in prints, plot titles and the final summary,
-so you can later swap the classifier and keep clear records.
+Stochastic Gradient Descent (Linear classifier) 7-variant benchmarking script
+for binary intrusion detection on the SDN-Net dataset.
 
-Features:
- - Runs the same 7 experiment variants (Unbalanced, RF-FS, IG-FS, SMOTE, SMOTE+RF-FS, SMOTE+IG-FS, SMOTE-Tomek)
- - Displays classification report, confusion matrix and ROC inline for each variant
- - For FS variants, prints selected features and compares RF importances vs IG scores
- - Plots a learning curve (accuracy) per model as a proxy for loss curve
- - Adds an "algorithm" field to printed output and to the final summary (default "DecisionTree")
- - Optional saving (--save) and pausing between models (--pause)
+Why 7 models?
+ → Each model tests a different data balancing + feature selection strategy
+    to analyze robustness, class-imbalance impact, convergence, and ranking stability.
 
-Usage:
-  python dt_binary.py --csv ../SDN-Net.csv --k 30
-  python dt_binary.py --csv ../SDN-Net.csv --k 30 --save --outdir outputs --pause
+Why many ML / DL algorithms?
+ → Network intrusion behavior is complex and heterogeneous. No single model is
+    universally optimal. Evaluating diverse algorithms prevents biased conclusions,
+    reveals generalization limits, and identifies the best trade-off for SDN flows.
 
-Dependencies:
-  pip install pandas numpy scikit-learn imbalanced-learn matplotlib seaborn joblib
+Variants:
+ 1) Unbalanced
+ 2) Unbalanced + RF Feature Selection (RF-FS)
+ 3) Unbalanced + Information Gain FS (IG-FS)
+ 4) SMOTE
+ 5) SMOTE + RF-FS
+ 6) SMOTE + IG-FS
+ 7) SMOTE-Tomek
 """
-import os
-import json
 import argparse
 from pathlib import Path
 from datetime import datetime
 import time
+import json
 
 import numpy as np
 import pandas as pd
@@ -36,262 +37,173 @@ import joblib
 
 from sklearn.model_selection import train_test_split, learning_curve
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score,
-                             classification_report, confusion_matrix, roc_curve, auc)
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score,
+    classification_report, confusion_matrix, roc_curve, auc
+)
+
+from sklearn.linear_model import SGDClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectKBest, mutual_info_classif
+from sklearn.utils.class_weight import compute_class_weight
 
 from imblearn.over_sampling import SMOTE
 from imblearn.combine import SMOTETomek
 
-sns.set(style="whitegrid")
 RND = 42
+sns.set(style="whitegrid")
+
 
 def timestamp():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
+
 def ensure_dir(d):
     Path(d).mkdir(parents=True, exist_ok=True)
 
-def safe_map_attack_type(series):
-    attacks_types = {
-        'NORMAL': 'normal',
-        'DOS': 'attack',
-        'DDOS': 'attack',
-        'WEB ATTACK � BRUTE FORCE': 'attack',
-        'WEB ATTACK � XSS': 'attack',
-        'WEB ATTACK � SQL INJECTION': 'attack',
-        'WEB-ATTACK': 'attack',
-        'U2R': 'attack',
-        'PROBE': 'attack',
-        'BFA': 'attack',
-        'BOTNET': 'attack',
-    }
-    attacks_map = {str(k).strip().upper(): v for k, v in attacks_types.items()}
-    normalized = series.astype(str).str.strip().str.upper()
-    mapped = normalized.map(attacks_map).fillna('attack')
-    return mapped
 
 def rf_feature_importances(X_train, y_train):
+    """Compute RF feature importance for selection."""
     rf = RandomForestClassifier(n_estimators=200, random_state=RND, n_jobs=-1)
     rf.fit(X_train, y_train)
-    importances = pd.Series(rf.feature_importances_, index=X_train.columns)
-    importances = importances.sort_values(ascending=False)
-    return importances
+    return pd.Series(rf.feature_importances_, index=X_train.columns).sort_values(ascending=False)
+
 
 def rf_feature_selection(X_train, y_train, k):
-    importances = rf_feature_importances(X_train, y_train)
-    selected = list(importances.index[:k])
-    return selected
+    """Return top-K RF-ranked features and the full importance series."""
+    feats = rf_feature_importances(X_train, y_train)
+    return list(feats.index[:k]), feats
+
 
 def ig_feature_selection_with_scores(X_train, y_train, k):
+    """Return top-K IG-ranked features and full scores."""
     selector = SelectKBest(score_func=mutual_info_classif, k=k)
     selector.fit(X_train, y_train)
-    scores = pd.Series(selector.scores_, index=X_train.columns).sort_values(ascending=False)
-    selected = list(scores.index[:k])
-    return selected, scores
+    ig = pd.Series(selector.scores_, index=X_train.columns).sort_values(ascending=False)
+    return list(ig.index[:k]), ig
 
-def plot_feature_selection_comparison(rf_imp, ig_scores, top_k=20, title_suffix=""):
-    """
-    rf_imp: pd.Series of RF importances indexed by feature name (sorted desc).
-    ig_scores: pd.Series of mutual_info scores indexed by feature name (not necessarily sorted).
-    Plots side-by-side horizontal bar charts of top_k features for RF and IG, plus overlap info.
-    """
-    rf_imp = rf_imp.sort_values(ascending=False)
-    ig_scores = ig_scores.sort_values(ascending=False)
 
-    rf_top = rf_imp.head(top_k)
+def plot_fs_comparison(rf_scores, ig_scores, top_k=20, suffix=""):
+    """Plot RF importance vs IG ranking overlap."""
+    rf_top = rf_scores.head(top_k)
     ig_top = ig_scores.head(top_k)
+    shared = set(rf_top.index) & set(ig_top.index)
 
-    rf_set = set(rf_top.index)
-    ig_set = set(ig_top.index)
-    overlap = rf_set & ig_set
-
-    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
-    rf_top.sort_values().plot.barh(ax=axes[0], color='tab:blue')
-    axes[0].set_title("Feature Importances (Random Forest) " + title_suffix)
-    axes[0].set_xlabel("Importance")
-
-    ig_top.sort_values().plot.barh(ax=axes[1], color='tab:green')
-    axes[1].set_title("Feature Scores (Information Gain) " + title_suffix)
-    axes[1].set_xlabel("Mutual Information Score")
-
+    plt.figure(figsize=(10, 5))
+    rf_top.sort_values().plot.barh(color='tab:blue')
+    plt.title(f"RF Feature Importances {suffix}")
+    plt.xlabel("Importance")
     plt.tight_layout()
     plt.show()
 
-    print(f"Top {top_k} RF features count: {len(rf_top)}; Top {top_k} IG features count: {len(ig_top)}")
-    print(f"Overlap count: {len(overlap)}")
-    if overlap:
-        print("Overlapping features (RF ∩ IG):")
-        print(sorted(list(overlap)))
-    else:
-        print("No overlap in top features.")
-
-def plot_learning_curve_for_model(estimator, X, y, title="Learning Curve", cv=5, n_jobs=1, train_sizes=np.linspace(0.1, 1.0, 5)):
-    """
-    Plot learning curve (train and cross-validation score) for estimator on data X,y.
-    Uses accuracy as scoring.
-    """
-    plt.figure(figsize=(8,6))
-    train_sizes, train_scores, val_scores = learning_curve(estimator, X, y, cv=cv, scoring='accuracy', train_sizes=train_sizes, n_jobs=n_jobs)
-    train_mean = np.mean(train_scores, axis=1)
-    train_std = np.std(train_scores, axis=1)
-    val_mean = np.mean(val_scores, axis=1)
-    val_std = np.std(val_scores, axis=1)
-    plt.plot(train_sizes, train_mean, 'o-', color='r', label='Training score')
-    plt.plot(train_sizes, val_mean, 'o-', color='g', label='Cross-validation score')
-    plt.fill_between(train_sizes, train_mean - train_std, train_mean + train_std, alpha=0.1, color='r')
-    plt.fill_between(train_sizes, val_mean - val_std, val_mean + val_std, alpha=0.1, color='g')
-    plt.title(title)
-    plt.xlabel("Training examples")
-    plt.ylabel("Score (accuracy)")
-    plt.legend(loc="best")
-    plt.grid(True)
+    plt.figure(figsize=(10, 5))
+    ig_top.sort_values().plot.barh(color='tab:green')
+    plt.title(f"IG Feature Scores {suffix}")
+    plt.xlabel("Mutual Info Score")
     plt.tight_layout()
     plt.show()
 
-def train_dt_display(name, X_train_df, X_test_df, y_train, y_test, features,
-                     algo_name="DecisionTree", save_outputs=False, outdir="outputs", pause_between=False, show_fs_info=False, top_k_fs=20):
-    """
-    Train classifier (DecisionTree by default), display classification report, confusion matrix and ROC inline.
-    algo_name: string to display and include in results (e.g. 'DecisionTree') - useful when you replace classifier later.
-    show_fs_info: if True and features provided, show feature selection info (RF importances vs IG).
-    top_k_fs: number of features to show in FS comparison.
-    """
-    stamp = timestamp()
-    model_dir = Path(outdir) / f"{name.replace(' ', '_')}_{stamp}"
-    if save_outputs:
-        ensure_dir(model_dir)
+    print(f"Top {top_k} overlap (RF ∩ IG): {len(shared)}")
+    if shared:
+        print("Shared top-ranked features:", sorted(shared))
 
-    # Scale features
-    scaler = StandardScaler()
-    X_train_sc = scaler.fit_transform(X_train_df)
-    X_test_sc = scaler.transform(X_test_df)
 
-    # Select classifier according to algo_name (currently supports DecisionTree; easy to extend)
-    if algo_name.lower() in ("decisiontree", "decision_tree", "dt"):
-        clf = DecisionTreeClassifier(random_state=RND)
-    else:
-        # Fallback: DecisionTree if unknown
-        print(f"Algo '{algo_name}' not recognized; using DecisionTree by default.")
-        clf = DecisionTreeClassifier(random_state=RND)
-
-    # Train
-    clf.fit(X_train_sc, y_train)
-    y_pred = clf.predict(X_test_sc)
-
-    # Score for ROC
-    score_for_roc = None
-    if hasattr(clf, "predict_proba"):
-        try:
-            score_for_roc = clf.predict_proba(X_test_sc)[:, 1]
-        except Exception:
-            score_for_roc = None
-    if score_for_roc is None and hasattr(clf, "decision_function"):
-        try:
-            score_for_roc = clf.decision_function(X_test_sc)
-        except Exception:
-            score_for_roc = None
-    if score_for_roc is None:
-        score_for_roc = y_pred
-
-    # Metrics
-    acc = accuracy_score(y_test, y_pred)
-    prec = precision_score(y_test, y_pred, zero_division=0)
-    rec = recall_score(y_test, y_pred, zero_division=0)
-    f1v = f1_score(y_test, y_pred, zero_division=0)
-    report = classification_report(y_test, y_pred, zero_division=0)
-    cm = confusion_matrix(y_test, y_pred)
-
-    # ROC/AUC
+def plot_learning_curve(clf, X, y, suffix=""):
+    """Plot learning curve using accuracy."""
     try:
-        fpr, tpr, _ = roc_curve(y_test, score_for_roc)
-        roc_auc = auc(fpr, tpr)
-    except Exception:
-        fpr, tpr, roc_auc = None, None, None
-
-    # Print and display
-    print(f"\n=== {name} ({algo_name}) ===")
-    print(f"Accuracy: {acc:.4f}  Precision: {prec:.4f}  Recall: {rec:.4f}  F1: {f1v:.4f}  AUC: {roc_auc if roc_auc is not None else 'N/A'}")
-    print("\nClassification report:\n", report)
-
-    # Feature selection info for FS variants
-    if show_fs_info and isinstance(features, (list, pd.Index, np.ndarray)):
-        Xtr_fs = X_train_df.copy()
-        try:
-            rf_imp = rf_feature_importances(Xtr_fs, y_train)
-        except Exception as e:
-            print("Error computing RF importances:", e)
-            rf_imp = pd.Series(dtype=float)
-        try:
-            _, ig_scores = ig_feature_selection_with_scores(Xtr_fs, y_train, k=min(len(Xtr_fs.columns), top_k_fs))
-        except Exception as e:
-            print("Error computing IG scores:", e)
-            ig_scores = pd.Series(dtype=float)
-
-        # Print selected features (the ones used for training)
-        print("\nSelected features used for training (first 100 shown):")
-        print(list(features)[:100])
-
-        # Plot comparison
-        if not rf_imp.empty and not ig_scores.empty:
-            plot_feature_selection_comparison(rf_imp, ig_scores, top_k=top_k_fs, title_suffix=f"({name})")
-        else:
-            if not rf_imp.empty:
-                plt.figure(figsize=(8,6)); rf_imp.head(top_k_fs).sort_values().plot.barh(color='tab:blue'); plt.title(f"RF Feature Importances ({name})"); plt.tight_layout(); plt.show()
-            if not ig_scores.empty:
-                plt.figure(figsize=(8,6)); ig_scores.head(top_k_fs).sort_values().plot.barh(color='tab:green'); plt.title(f"IG Scores ({name})"); plt.tight_layout(); plt.show()
-
-    # Side-by-side plot: Confusion Matrix and ROC
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[0], cbar=False, xticklabels=[0,1], yticklabels=[0,1])
-    axes[0].set_title(f"Confusion Matrix - {name} ({algo_name})")
-    axes[0].set_xlabel("Predicted")
-    axes[0].set_ylabel("True")
-
-    axes[1].plot([0,1], [0,1], 'k--', alpha=0.6)
-    if fpr is not None and tpr is not None:
-        axes[1].plot(fpr, tpr, lw=2, label=f"AUC = {roc_auc:.3f}")
-    else:
-        axes[1].text(0.5, 0.5, 'ROC N/A', ha='center')
-    axes[1].set_title(f"ROC Curve - {name} ({algo_name})")
-    axes[1].set_xlabel("False Positive Rate")
-    axes[1].set_ylabel("True Positive Rate")
-    axes[1].legend(loc='lower right')
-    plt.tight_layout()
-    plt.show()
-
-    # Learning curve (accuracy) as a proxy for loss curve
-    try:
-        plot_learning_curve_for_model(DecisionTreeClassifier(random_state=RND), X_train_df, y_train, title=f"Learning Curve ({name} - {algo_name})", cv=5, n_jobs=-1)
+        sizes, train_scores, val_scores = learning_curve(
+            clf, X, y, cv=5, scoring='accuracy', n_jobs=-1,
+            train_sizes=[0.1, 0.3, 0.5, 0.7, 1.0]
+        )
+        plt.figure(figsize=(7, 5))
+        plt.plot(sizes, np.mean(train_scores, 1), 'o-', label="Train")
+        plt.plot(sizes, np.mean(val_scores, 1), 'o-', label="Validation")
+        plt.title(f"Learning Curve – SGD {suffix}")
+        plt.xlabel("Training examples")
+        plt.ylabel("Accuracy")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
     except Exception as e:
         print("Unable to plot learning curve:", e)
 
-    # Optionally save artifacts
-    if save_outputs:
-        joblib.dump(clf, model_dir / f"{algo_name}_model_{stamp}.joblib")
-        joblib.dump(scaler, model_dir / f"scaler_{stamp}.joblib")
-        if features is not None:
-            pd.Series(list(features), name="feature").to_csv(model_dir / f"features_{stamp}.csv", index=False)
-        metrics = {"algorithm": algo_name, "accuracy": float(acc), "precision": float(prec), "recall": float(rec), "f1": float(f1v), "auc": float(roc_auc) if roc_auc is not None else None}
-        with open(model_dir / f"metrics_{stamp}.json", "w", encoding="utf8") as f:
-            json.dump(metrics, f, indent=2, ensure_ascii=False)
-        with open(model_dir / f"classification_report_{stamp}.txt", "w", encoding="utf8") as f:
-            f.write(report)
-        fig.savefig(model_dir / f"confusion_roc_{stamp}.png", dpi=150)
-        plt.close(fig)
 
-    # Pause option useful in notebooks
-    if pause_between:
+def run_sgd(name, X_train, X_test, y_train, y_test, *,
+            loss='log_loss', penalty='l2', alpha=1e-4, max_iter=1000,
+            class_weight=None, algo="SGD", save=False, outdir="outputs"):
+    """Run one experiment using SGDClassifier and return metrics dict."""
+    stamp = timestamp()
+    model_dir = Path(outdir) / f"{name.replace(' ', '_')}_{stamp}"
+    if save:
+        ensure_dir(model_dir)
+
+    scaler = StandardScaler()
+    X_train_sc = scaler.fit_transform(X_train)
+    X_test_sc = scaler.transform(X_test)
+
+    clf = SGDClassifier(loss=loss, penalty=penalty, alpha=alpha, max_iter=max_iter, random_state=RND, class_weight=class_weight)
+    clf.fit(X_train_sc, y_train)
+    y_pred = clf.predict(X_test_sc)
+
+    # ROC score if possible
+    score = None
+    if hasattr(clf, "predict_proba"):
         try:
-            input("Press Enter to continue to next model...")
+            score = clf.predict_proba(X_test_sc)[:, 1]
         except Exception:
-            time.sleep(2)
+            score = None
+    if score is None and hasattr(clf, "decision_function"):
+        try:
+            score = clf.decision_function(X_test_sc)
+        except Exception:
+            score = None
+    if score is None:
+        score = y_pred
 
-    return {"config": name, "algorithm": algo_name, "accuracy": acc, "precision": prec, "recall": rec, "f1": f1v, "auc": roc_auc}
+    acc = accuracy_score(y_test, y_pred)
+    pr = precision_score(y_test, y_pred, zero_division=0)
+    rc = recall_score(y_test, y_pred, zero_division=0)
+    f1 = f1_score(y_test, y_pred, zero_division=0)
+    report = classification_report(y_test, y_pred, zero_division=0)
+
+    print(f"\n=== {name} ({algo}) ===")
+    print(f"Accuracy: {acc:.4f}  Precision: {pr:.4f}  Recall: {rc:.4f}  F1: {f1:.4f}")
+    print("\nClassification report:\n", report)
+
+    cm = confusion_matrix(y_test, y_pred)
+    fig, ax = plt.subplots(figsize=(6, 4))
+    sns.heatmap(cm, annot=True, fmt='d', xticklabels=[0, 1], yticklabels=[0, 1], cbar=False, ax=ax)
+    ax.set_title(f"Confusion Matrix - {name} ({algo})")
+    ax.set_xlabel("Predicted"); ax.set_ylabel("True")
+    plt.tight_layout(); plt.show()
+
+    auc_score = None
+    try:
+        fpr, tpr, _ = roc_curve(y_test, score)
+        auc_score = auc(fpr, tpr)
+        plt.figure(figsize=(6, 4))
+        plt.plot(fpr, tpr, label=f"AUC={auc_score:.3f}")
+        plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
+        plt.title(f"ROC - {name} ({algo})"); plt.legend(); plt.tight_layout(); plt.show()
+    except Exception:
+        print("ROC unavailable for this classifier/output.")
+
+    plot_learning_curve(SGDClassifier(loss=loss, penalty=penalty, alpha=alpha, random_state=RND), X_train, y_train, suffix=f"({name})")
+
+    # Save artifacts
+    if save:
+        try:
+            joblib.dump(clf, model_dir / f"{algo}_model_{stamp}.joblib")
+            joblib.dump(scaler, model_dir / f"scaler_{stamp}.joblib")
+        except Exception as e:
+            print("Unable to save model/scaler:", e)
+
+    return {"config": name, "algorithm": algo, "loss": loss, "penalty": penalty, "alpha": alpha, "max_iter": int(max_iter), "accuracy": acc, "precision": pr, "recall": rc, "f1": f1, "auc": auc_score}
+
 
 def load_and_prepare(csv_path):
+    """Load CSV and prepare X, y (binary labels 0=normal,1=attack)."""
     csv_path = Path(csv_path)
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV not found: {csv_path}")
@@ -300,44 +212,46 @@ def load_and_prepare(csv_path):
     unnamed = [c for c in df.columns if c.startswith("Unnamed")]
     if unnamed:
         df.drop(columns=unnamed, inplace=True)
-    # Map or ensure Attack Type
+    # Attack Type column
     if "Attack Type" not in df.columns:
         if "Class" not in df.columns:
             raise KeyError("CSV must contain 'Attack Type' or 'Class'.")
-        df['Attack Type'] = df['Class'].astype(str).str.strip()
-    # Binary label
-    df['Attack_Binary_Label'] = df['Attack Type'].astype(str).str.strip().str.upper().apply(lambda x: 0 if x=="NORMAL" else 1)
-    # One-hot encode object cols except labels
-    exclude = {'Class', 'Attack Type', 'Attack_Binary_Label'}
-    obj_cols = [c for c in df.select_dtypes(include=['object','category']).columns if c not in exclude]
+        df["Attack Type"] = df["Class"].astype(str).str.strip()
+    df["Attack_Mapped"] = df["Attack Type"].astype(str).str.strip().str.upper().map(lambda x: "NORMAL" if x == "NORMAL" else "ATTACK")
+    df["Attack_Binary_Label"] = df["Attack_Mapped"].map({"NORMAL": 0, "ATTACK": 1}).astype(int)
+
+    exclude = {"Class", "Attack Type", "Attack_Mapped", "Attack_Binary_Label"}
+    obj_cols = [c for c in df.select_dtypes(include=["object", "category"]).columns if c not in exclude]
     if obj_cols:
         df = pd.get_dummies(df, columns=obj_cols, drop_first=True)
-    # Numeric cleanup
+
     num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     if num_cols:
         df[num_cols] = df[num_cols].replace([np.inf, -np.inf], np.nan)
         df[num_cols] = df[num_cols].fillna(df[num_cols].mean())
-    drop_cols = [c for c in ['Class','Attack Type','Attack_Binary_Label'] if c in df.columns]
-    X = df.drop(columns=drop_cols, errors='ignore')
-    y = df['Attack_Binary_Label'].astype(int)
+
+    drop_cols = [c for c in ["Class", "Attack Type", "Attack_Mapped", "Attack_Binary_Label"] if c in df.columns]
+    X = df.drop(columns=drop_cols, errors="ignore")
+    y = df["Attack_Binary_Label"].astype(int)
     return X, y
+
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--csv", default="../SDN-Net.csv", help="Path to SDN-Net CSV")
-    parser.add_argument("--outdir", default="outputs", help="Output dir (only used if --save)")
-    parser.add_argument("--k", type=int, default=30, help="Number of features for FS")
-    parser.add_argument("--save", action="store_true", help="If set, save artifacts to outdir (default: False)")
-    parser.add_argument("--pause", action="store_true", help="Pause between models (press Enter). Default: False")
-    parser.add_argument("--algo", default="DecisionTree", help="Algorithm name label to include in results (default: DecisionTree)")
-    args, unknown = parser.parse_known_args(argv)
-    if unknown:
-        print("Ignored unknown args (likely from Jupyter):", unknown)
+    parser.add_argument("--csv", default="../SDN-Net.csv")
+    parser.add_argument("--outdir", default="outputs")
+    parser.add_argument("--k", type=int, default=30)
+    parser.add_argument("--save", action="store_true")
+    parser.add_argument("--loss", default="log_loss", help="SGD loss (e.g. log_loss)")
+    parser.add_argument("--penalty", default="l2", help="penalty (l2, l1, elasticnet)")
+    parser.add_argument("--alpha", type=float, default=1e-4, help="regularization strength")
+    parser.add_argument("--max_iter", type=int, default=1000)
+    parser.add_argument("--class_weight", action="store_true", help="Use class_weight='balanced' in SGD")
+    args = parser.parse_args(argv)
 
     X_full, y_full = load_and_prepare(args.csv)
     print("Dataset shape:", X_full.shape)
 
-    # Train/test split (stratified)
     X_train_raw, X_test_raw, y_train, y_test = train_test_split(
         X_full, y_full, test_size=0.33, random_state=RND, stratify=y_full
     )
@@ -346,53 +260,67 @@ def main(argv=None):
     results = []
 
     # Model 1: Unbalanced full
-    results.append(train_dt_display("Model1_Unbalanced_Full", X_train_raw, X_test_raw, y_train, y_test,
-                                    X_full.columns, algo_name=args.algo, save_outputs=args.save, outdir=args.outdir, pause_between=args.pause))
+    cw = "balanced" if args.class_weight else None
+    results.append(run_sgd("Model1_Unbalanced_Full", X_train_raw, X_test_raw, y_train, y_test,
+                           loss=args.loss, penalty=args.penalty, alpha=args.alpha, max_iter=args.max_iter,
+                           class_weight=cw, save=args.save, outdir=args.outdir))
 
     # Model 2: Unbalanced + RF-FS
-    sel2 = rf_feature_selection(X_train_raw, y_train, args.k)
-    results.append(train_dt_display("Model2_Unbalanced_RF-FS", X_train_raw[sel2], X_test_raw[sel2], y_train, y_test,
-                                    sel2, algo_name=args.algo, save_outputs=args.save, outdir=args.outdir, pause_between=args.pause, show_fs_info=True, top_k_fs=args.k))
+    sel2, rf_scores2 = rf_feature_selection(X_train_raw, y_train, args.k)
+    if args.save:
+        ensure_dir(args.outdir)
+        pd.Series(sel2, name="feature").to_csv(Path(args.outdir) / f"features_model2_{timestamp()}.csv", index=False)
+    results.append(run_sgd("Model2_Unbalanced_RF-FS", X_train_raw[sel2], X_test_raw[sel2], y_train, y_test,
+                           loss=args.loss, penalty=args.penalty, alpha=args.alpha, max_iter=args.max_iter,
+                           class_weight=cw, save=args.save, outdir=args.outdir))
 
     # Model 3: Unbalanced + IG-FS
-    sel3, ig_scores_full = ig_feature_selection_with_scores(X_train_raw, y_train, k=args.k)
-    results.append(train_dt_display("Model3_Unbalanced_IG-FS", X_train_raw[sel3], X_test_raw[sel3], y_train, y_test,
-                                    sel3, algo_name=args.algo, save_outputs=args.save, outdir=args.outdir, pause_between=args.pause, show_fs_info=True, top_k_fs=args.k))
+    sel3, ig_scores3 = ig_feature_selection_with_scores(X_train_raw, y_train, args.k)
+    if args.save:
+        pd.Series(sel3, name="feature").to_csv(Path(args.outdir) / f"features_model3_{timestamp()}.csv", index=False)
+    results.append(run_sgd("Model3_Unbalanced_IG-FS", X_train_raw[sel3], X_test_raw[sel3], y_train, y_test,
+                           loss=args.loss, penalty=args.penalty, alpha=args.alpha, max_iter=args.max_iter,
+                           class_weight=cw, save=args.save, outdir=args.outdir))
 
     # Model 4: SMOTE balanced (full)
     smote = SMOTE(random_state=RND)
-    X_train_m4_arr, y_train_m4 = smote.fit_resample(X_train_raw, y_train)
-    X_train_m4 = pd.DataFrame(X_train_m4_arr, columns=X_train_raw.columns)
-    results.append(train_dt_display("Model4_SMOTE_Full", X_train_m4, X_test_raw, y_train_m4, y_test,
-                                    X_full.columns, algo_name=args.algo, save_outputs=args.save, outdir=args.outdir, pause_between=args.pause))
+    X4_arr, y4 = smote.fit_resample(X_train_raw, y_train)
+    X_train_m4 = pd.DataFrame(X4_arr, columns=X_train_raw.columns)
+    results.append(run_sgd("Model4_SMOTE_Full", X_train_m4, X_test_raw, y4, y_test,
+                           loss=args.loss, penalty=args.penalty, alpha=args.alpha, max_iter=args.max_iter,
+                           class_weight=None, save=args.save, outdir=args.outdir))
 
     # Model 5: SMOTE + RF-FS
-    sel5 = rf_feature_selection(X_train_m4, y_train_m4, args.k)
-    results.append(train_dt_display("Model5_SMOTE_RF-FS", X_train_m4[sel5], X_test_raw[sel5], y_train_m4, y_test,
-                                    sel5, algo_name=args.algo, save_outputs=args.save, outdir=args.outdir, pause_between=args.pause, show_fs_info=True, top_k_fs=args.k))
+    sel5, rf_scores5 = rf_feature_selection(X_train_m4, y4, args.k)
+    if args.save:
+        pd.Series(sel5, name="feature").to_csv(Path(args.outdir) / f"features_model5_{timestamp()}.csv", index=False)
+    results.append(run_sgd("Model5_SMOTE_RF-FS", X_train_m4[sel5], X_test_raw[sel5], y4, y_test,
+                           loss=args.loss, penalty=args.penalty, alpha=args.alpha, max_iter=args.max_iter,
+                           class_weight=None, save=args.save, outdir=args.outdir))
 
     # Model 6: SMOTE + IG-FS
-    sel6, ig_scores_m4 = ig_feature_selection_with_scores(X_train_m4, y_train_m4, k=args.k)
-    results.append(train_dt_display("Model6_SMOTE_IG-FS", X_train_m4[sel6], X_test_raw[sel6], y_train_m4, y_test,
-                                    sel6, algo_name=args.algo, save_outputs=args.save, outdir=args.outdir, pause_between=args.pause, show_fs_info=True, top_k_fs=args.k))
+    sel6, ig_scores6 = ig_feature_selection_with_scores(X_train_m4, y4, args.k)
+    if args.save:
+        pd.Series(sel6, name="feature").to_csv(Path(args.outdir) / f"features_model6_{timestamp()}.csv", index=False)
+    results.append(run_sgd("Model6_SMOTE_IG-FS", X_train_m4[sel6], X_test_raw[sel6], y4, y_test,
+                           loss=args.loss, penalty=args.penalty, alpha=args.alpha, max_iter=args.max_iter,
+                           class_weight=None, save=args.save, outdir=args.outdir))
 
     # Model 7: SMOTE-Tomek balanced (full)
     smt = SMOTETomek(random_state=RND)
-    X_train_m7_arr, y_train_m7 = smt.fit_resample(X_train_raw, y_train)
-    X_train_m7 = pd.DataFrame(X_train_m7_arr, columns=X_train_raw.columns)
-    results.append(train_dt_display("Model7_SMOTETomek_Full", X_train_m7, X_test_raw, y_train_m7, y_test,
-                                    X_full.columns, algo_name=args.algo, save_outputs=args.save, outdir=args.outdir, pause_between=args.pause))
+    X7_arr, y7 = smt.fit_resample(X_train_raw, y_train)
+    X_train_m7 = pd.DataFrame(X7_arr, columns=X_train_raw.columns)
+    results.append(run_sgd("Model7_SMOTETomek_Full", X_train_m7, X_test_raw, y7, y_test,
+                           loss=args.loss, penalty=args.penalty, alpha=args.alpha, max_iter=args.max_iter,
+                           class_weight=None, save=args.save, outdir=args.outdir))
 
-    # Summary of all 7 models (includes algorithm column)
-    results_df = pd.DataFrame(results)
-    print("\n=== Summary of all 7 models ===")
-    print(results_df)
+    summary = pd.DataFrame(results)
+    print("\n==== FINAL SUMMARY ====\n", summary)
 
     if args.save:
         ensure_dir(args.outdir)
-        summary_path = Path(args.outdir) / f"summary_7models_{args.algo}_{timestamp()}.csv"
-        results_df.to_csv(summary_path, index=False)
-        print("Saved summary to:", summary_path)
+        summary.to_csv(Path(args.outdir) / f"summary_{timestamp()}.csv", index=False)
+
 
 if __name__ == "__main__":
     main()
