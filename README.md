@@ -1,3 +1,133 @@
+# AI-Driven SDN/NFV Intrusion Detection Benchmarking
+  # Binary & Multi-Class Pipelines with Extensive ML/DL Evaluation
+
+Modern SDN/NFV networks operate under centralized, programmable control, producing traffic patterns that differ radically from conventional distributed architectures. Detecting attacks in these environments requires evaluating more than one learning path and more than one feature view.
+This repository benchmarks intrusion-detection pipelines over flow-level traffic using:
+•	Two experiment branches:
+o	binary/ → normal vs attack detection
+o	multiclass/ → precise attack-type identification
+•	A broad spectrum of learning models:
+o	8 classical Machine Learning algorithms
+o	4 Deep Learning architectures
+•	Seven pipeline variants per experiment file, to rigorously measure:
+o	bias caused by imbalance
+o	sensitivity to feature noise
+o	stability under synthetic sampling
+o	decision-boundary trustworthiness
+The project delivers insights that are reproducible, measurable, interpretable, and suitable for real SDN/NFV security conclusions.
+
+# Preprocessing Principles
+All experiments start from the same preparation workflow:
+✔ Removes empty or unusable columns
+✔ Cleans numerical inconsistencies (NaN, ±∞)
+✔ Converts attack labels into numeric format
+✔ Standardizes features using StandardScaler
+✔ Performs stratified train/test splitting
+✔ Guarantees a clean, numerical input space suitable for ML/DL
+
+# Models Variants
+We train seven versions per experiment file, not seven classifiers, but seven pipeline conditions, all built on the same algorithm family.
+This allows us to compare how data structure and feature filtering influence detection behaviour in SDN flows.
+Variant	Sampling Strategy	Feature View	Purpose
+Model 1	Original (Unbalanced)	All Features	Baseline model bias measurement
+Model 2	Unbalanced	RF Importance top-K	Tests detection after noise-resistant ranking
+Model 3	Unbalanced	Mutual Information top-K	Tests info-rich feature efficiency under skew
+Model 4	SMOTE Balanced	All Features	Measures synthetic oversampling generalization
+Model 5	SMOTE	RF Importance top-K	Stability of RF-FS under sampled distribution
+Model 6	SMOTE	Mutual Info top-K	Stability of IG/MI-FS under balanced input
+Model 7	SMOTE-Tomek Balanced	All Features	Impact of cleaning ambiguous flow boundaries
+--> Scientific Goal: determine the most robust and trustworthy training pipeline before tying conclusions to model performance.
+# AI Evaluation Algorithms
+Intrusion detection in programmable networks cannot rely on a single classifier philosophy. We evaluate models that learn differently, decide differently, and generalize differently: 
+•	To compare linear vs non-linear learning on SDN flows
+•	To validate classification reliability across different inductive biases
+•	To detect overfitting behaviours (deep vs non-deep families)
+•	To understand how decision boundaries shift under different feature views
+•	To benchmark static inference vs sequential flow learning
+•	To ensure conclusions are not dependent on one model family
+
+Classical ML (8 scripts per branch) These models test feature-quality impact and detection bias under non-deep learning assumptions:
+
+Random Forest	ensemble voting + noise resilience
+Decision Tree	rule-based logic + explainability
+Logistic Regression	linear detection baseline
+Gradient Boosting	sequential error-correction
+K-Nearest Neighbors	neighbourhood proximity reasoning
+Gaussian NB	probabilistic independence view
+SGD Classifier	scalable online learning
+Linear SVM/SVC	margin-based separation bias
+
+Deep Learning (4 scripts per branch) These models test representation abstraction and traffic dynamics:
+
+CNN	Auto-extracts spatial/flow feature combinations
+RNN	Learns temporal dependencies in flow sequences
+Perceptron	Minimal neural baseline (no depth), for sanity check
+Auto-Encoders	Learns reconstruction behaviour to model anomalies
+
+--> Conclusion: broad algorithmic coverage ensures scientific defensibility and practical generalization.
+
+# Performance Metrics
+For every model in every file:
+📊 Accuracy, Precision, Recall, F1-Score
+📈 ROC curve + AUC (when available)
+🔢 Confusion Matrix (heatmap)
+📑 Full classification report (attack distribution, false alerts, missed detection)
+Visual results appear inline so you never have to open folders to inspect plots.
+
+# Final Repository Layout
+Branch: binary/
+binary/
+   ├── rf_binary.py            (7 models inside)
+   ├── dt_binary.py            (7 models inside)
+   ├── lr_binary.py            (7 models inside)
+   ├── gb_binary.py            (7 models inside)
+   ├── knn_binary.py           (7 models inside)
+   ├── gnb_binary.py           (7 models inside)
+   ├── sgd_binary.py           (7 models inside)
+   └── svc_binary.py           (7 models inside)
+
+   ├── cnn_binary.py           (7 models inside)
+   ├── rnn_binary.py           (7 models inside)
+   ├── perceptron_binary.py    (7 models inside)
+   └── autoencoder_binary.py   (7 models inside)
+Branch: multiclass/
+multiclass/
+   ├── rf_multiclass.py            (7 models inside)
+   ├── dt_multiclass.py            (7 models inside)
+   ├── lr_multiclass.py            (7 models inside)
+   ├── gb_multiclass.py            (7 models inside)
+   ├── knn_multiclass.py           (7 models inside)
+   ├── gnb_multiclass.py           (7 models inside)
+   ├── sgd_multiclass.py           (7 models inside)
+   └── svc_multiclass.py           (7 models inside)
+
+   ├── cnn_multiclass.py           (7 models inside)
+   ├── rnn_multiclass.py           (7 models inside)
+   ├── perceptron_multiclass.py    (7 models inside)
+   └── autoencoder_multiclass.py   (7 models inside)
+🌟 Rule: Every script exists in both branches, and each script trains 7 models internally.
+
+📦 Local Installation
+pip install pandas numpy scikit-learn imbalanced-learn matplotlib seaborn joblib imblearn
+
+▶️ Run Experiments
+Display only (default):
+python <file>.py --csv ../SDN-Net.csv --k 20
+Save artifacts too:
+python <file>.py --csv ../SDN-Net.csv --k 40 --save --outdir results/
+Pause between plots:
+python <file>.py --csv ../SDN-Net.csv --k 10 --pause
+
+📜 Research License
+You may reuse or distribute with:
+📝 MIT
+
+✨ Final Words
+This repository exists to help the research community understand how model bias, feature noise, and class imbalance jointly affect intrusion detection in centralized programmable networks. By evaluating multiple algorithmic philosophies across seven pipeline variants for both binary and multi-class scenarios, we provide scientifically defensible conclusions built on reproducible benchmarks.
+
+
+
+
 # Intrusion Detection Benchmarking on SDN-Net Dataset
 
 This repository contains the code used to reproduce all benchmarking experiments from our manuscript in SDN/NFV intrusion detection. It includes 12 implemented classifiers covering ML (Random Forest, Decision Tree, KNN, Gaussian NB, Logistic Regression, SGD, Linear SVC, Gradient Boosting) and DL models (RNN, CNN, MLP, Autoencoder) evaluated on SDN-Net flows.
