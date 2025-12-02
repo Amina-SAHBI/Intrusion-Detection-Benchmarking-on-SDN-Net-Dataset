@@ -71,42 +71,64 @@ Every model evaluation displays:
 
 ---
 
-## 📁 Repository Structure
 
-### Branch: `binary/`
+# 📂 Repository Structure
+
+### 🔹 Branch: `binary/`
+
+```
+
 binary/
-├── rf_binary.py
-├── dt_binary.py
-├── lr_binary.py
-├── gb_binary.py
-├── knn_binary.py
-├── gnb_binary.py
-├── sgd_binary.py
-└── svm_binary.py
-
+│
+├── 📁 ML_Classifiers/
+│   ├── rf_binary.py
+│   ├── dt_binary.py
+│   ├── lr_binary.py
+│   ├── gb_binary.py
+│   ├── knn_binary.py
+│   ├── gnb_binary.py
+│   ├── sgd_binary.py
+│   └── svm_binary.py
+│
+└── 📁 DL_Models/
 ├── cnn_binary.py
 ├── rnn_binary.py
 ├── perceptron_binary.py
 └── autoencoder_binary.py
 
-### Branch: `multiclass/`
-multiclass/
-├── rf_multiclass.py
-├── dt_multiclass.py
-├── lr_multiclass.py
-├── gb_multiclass.py
-├── knn_multiclass.py
-├── gnb_multiclass.py
-├── sgd_multiclass.py
-└── svm_multiclass.py
+```
 
+---
+
+### 🔹 Branch: `multiclass/`
+
+```
+
+multiclass/
+│
+├── 📁 ML_Classifiers/
+│   ├── rf_multiclass.py
+│   ├── dt_multiclass.py
+│   ├── lr_multiclass.py
+│   ├── gb_multiclass.py
+│   ├── knn_multiclass.py
+│   ├── gnb_multiclass.py
+│   ├── sgd_multiclass.py
+│   └── svm_multiclass.py
+│
+└── 📁 DL_Models/
 ├── cnn_multiclass.py
 ├── rnn_multiclass.py
 ├── perceptron_multiclass.py
 └── autoencoder_multiclass.py
 
+```
 
-> ** both branches contain the same classifiers, and **each script runs 7 pipeline variants inside it**.
+---
+
+> 🌟 **Both branches contain the same classifiers, and each script runs 7 pipeline variants inside it.**
+```
+
 
 ### 📦 Install dependencies
 ```bash
