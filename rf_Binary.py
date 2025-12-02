@@ -1,26 +1,38 @@
 #!/usr/bin/env python3
 """
-dt_binary.py
+rf_binary.py
 
-Variant of sdn_7_models_dt_display with algorithm name labeled in each model result.
-This makes it explicit (e.g. "DecisionTree") in prints, plot titles and the final summary,
-so you can later swap the classifier and keep clear records.
+Random Forest-based 7-variant benchmarking script for binary intrusion detection on SDN-Net.
+
+This script runs the same 7 experimental pipeline variants:
+  - Unbalanced
+  - Unbalanced + RF Feature Selection (RF-FS)
+  - Unbalanced + Information Gain / Mutual Information FS (IG-FS)
+  - SMOTE
+  - SMOTE + RF-FS
+  - SMOTE + IG-FS
+  - SMOTE-Tomek
+
+All variants use a Random Forest classifier as the core model. The `algo_name`
+label is included in printouts, plot titles and in the final summary so that
+results remain traceable when comparing multiple scripts.
 
 Features:
- - Runs the same 7 experiment variants (Unbalanced, RF-FS, IG-FS, SMOTE, SMOTE+RF-FS, SMOTE+IG-FS, SMOTE-Tomek)
- - Displays classification report, confusion matrix and ROC inline for each variant
+ - 7 experiment variants per run
+ - Inline display of metrics, confusion matrix and ROC for each variant
  - For FS variants, prints selected features and compares RF importances vs IG scores
- - Plots a learning curve (accuracy) per model as a proxy for loss curve
- - Adds an "algorithm" field to printed output and to the final summary (default "DecisionTree")
+ - Learning curve (accuracy) per model as a proxy for convergence / capacity
+ - "algorithm" field saved in metrics and summary (default: "RandomForest")
  - Optional saving (--save) and pausing between models (--pause)
 
 Usage:
-  python dt_binary.py --csv ../SDN-Net.csv --k 30
-  python dt_binary.py --csv ../SDN-Net.csv --k 30 --save --outdir outputs --pause
+  python rf_binary.py --csv ../SDN-Net.csv --k 30
+  python rf_binary.py --csv ../SDN-Net.csv --k 30 --save --outdir outputs --pause
 
 Dependencies:
   pip install pandas numpy scikit-learn imbalanced-learn matplotlib seaborn joblib
 """
+
 import os
 import json
 import argparse
@@ -36,9 +48,10 @@ import joblib
 
 from sklearn.model_selection import train_test_split, learning_curve
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score,
-                             classification_report, confusion_matrix, roc_curve, auc)
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score,
+    classification_report, confusion_matrix, roc_curve, auc
+)
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectKBest, mutual_info_classif
 
@@ -48,11 +61,14 @@ from imblearn.combine import SMOTETomek
 sns.set(style="whitegrid")
 RND = 42
 
+
 def timestamp():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
+
 def ensure_dir(d):
     Path(d).mkdir(parents=True, exist_ok=True)
+
 
 def safe_map_attack_type(series):
     attacks_types = {
@@ -73,6 +89,7 @@ def safe_map_attack_type(series):
     mapped = normalized.map(attacks_map).fillna('attack')
     return mapped
 
+
 def rf_feature_importances(X_train, y_train):
     rf = RandomForestClassifier(n_estimators=200, random_state=RND, n_jobs=-1)
     rf.fit(X_train, y_train)
@@ -80,10 +97,12 @@ def rf_feature_importances(X_train, y_train):
     importances = importances.sort_values(ascending=False)
     return importances
 
+
 def rf_feature_selection(X_train, y_train, k):
     importances = rf_feature_importances(X_train, y_train)
     selected = list(importances.index[:k])
     return selected
+
 
 def ig_feature_selection_with_scores(X_train, y_train, k):
     selector = SelectKBest(score_func=mutual_info_classif, k=k)
@@ -92,11 +111,13 @@ def ig_feature_selection_with_scores(X_train, y_train, k):
     selected = list(scores.index[:k])
     return selected, scores
 
+
 def plot_feature_selection_comparison(rf_imp, ig_scores, top_k=20, title_suffix=""):
     """
     rf_imp: pd.Series of RF importances indexed by feature name (sorted desc).
-    ig_scores: pd.Series of mutual_info scores indexed by feature name (not necessarily sorted).
-    Plots side-by-side horizontal bar charts of top_k features for RF and IG, plus overlap info.
+    ig_scores: pd.Series of mutual_info scores indexed by feature name.
+    Plots side-by-side horizontal bar charts of top_k features for RF and IG,
+    plus overlap information.
     """
     rf_imp = rf_imp.sort_values(ascending=False)
     ig_scores = ig_scores.sort_values(ascending=False)
@@ -128,17 +149,23 @@ def plot_feature_selection_comparison(rf_imp, ig_scores, top_k=20, title_suffix=
     else:
         print("No overlap in top features.")
 
-def plot_learning_curve_for_model(estimator, X, y, title="Learning Curve", cv=5, n_jobs=1, train_sizes=np.linspace(0.1, 1.0, 5)):
+
+def plot_learning_curve_for_model(estimator, X, y, title="Learning Curve", cv=5, n_jobs=1,
+                                  train_sizes=np.linspace(0.1, 1.0, 5)):
     """
-    Plot learning curve (train and cross-validation score) for estimator on data X,y.
+    Plot learning curve (train and cross-validation score) for estimator on data X, y.
     Uses accuracy as scoring.
     """
-    plt.figure(figsize=(8,6))
-    train_sizes, train_scores, val_scores = learning_curve(estimator, X, y, cv=cv, scoring='accuracy', train_sizes=train_sizes, n_jobs=n_jobs)
+    plt.figure(figsize=(8, 6))
+    train_sizes, train_scores, val_scores = learning_curve(
+        estimator, X, y, cv=cv, scoring='accuracy',
+        train_sizes=train_sizes, n_jobs=n_jobs
+    )
     train_mean = np.mean(train_scores, axis=1)
     train_std = np.std(train_scores, axis=1)
     val_mean = np.mean(val_scores, axis=1)
     val_std = np.std(val_scores, axis=1)
+
     plt.plot(train_sizes, train_mean, 'o-', color='r', label='Training score')
     plt.plot(train_sizes, val_mean, 'o-', color='g', label='Cross-validation score')
     plt.fill_between(train_sizes, train_mean - train_std, train_mean + train_std, alpha=0.1, color='r')
@@ -151,12 +178,28 @@ def plot_learning_curve_for_model(estimator, X, y, title="Learning Curve", cv=5,
     plt.tight_layout()
     plt.show()
 
-def train_dt_display(name, X_train_df, X_test_df, y_train, y_test, features,
-                     algo_name="DecisionTree", save_outputs=False, outdir="outputs", pause_between=False, show_fs_info=False, top_k_fs=20):
+
+def train_dt_display(
+    name,
+    X_train_df,
+    X_test_df,
+    y_train,
+    y_test,
+    features,
+    algo_name="RandomForest",
+    save_outputs=False,
+    outdir="outputs",
+    pause_between=False,
+    show_fs_info=False,
+    top_k_fs=20
+):
     """
-    Train classifier (DecisionTree by default), display classification report, confusion matrix and ROC inline.
-    algo_name: string to display and include in results (e.g. 'DecisionTree') - useful when you replace classifier later.
-    show_fs_info: if True and features provided, show feature selection info (RF importances vs IG).
+    Train classifier (RandomForest by default), display classification report,
+    confusion matrix and ROC inline.
+
+    algo_name: string to display and include in results (e.g. 'RandomForest')
+    show_fs_info: if True and features provided, show feature selection info
+                  (RF importances vs IG).
     top_k_fs: number of features to show in FS comparison.
     """
     stamp = timestamp()
@@ -169,13 +212,21 @@ def train_dt_display(name, X_train_df, X_test_df, y_train, y_test, features,
     X_train_sc = scaler.fit_transform(X_train_df)
     X_test_sc = scaler.transform(X_test_df)
 
-    # Select classifier according to algo_name (currently supports DecisionTree; easy to extend)
-    if algo_name.lower() in ("decisiontree", "decision_tree", "dt"):
-        clf = DecisionTreeClassifier(random_state=RND)
+    # Select classifier according to algo_name (RandomForest-based)
+    if algo_name.lower() in ("randomforest", "random_forest", "rf"):
+        clf = RandomForestClassifier(
+            n_estimators=200,
+            random_state=RND,
+            n_jobs=-1
+        )
     else:
-        # Fallback: DecisionTree if unknown
-        print(f"Algo '{algo_name}' not recognized; using DecisionTree by default.")
-        clf = DecisionTreeClassifier(random_state=RND)
+        # Fallback: RandomForest if unknown
+        print(f"Algo '{algo_name}' not recognized; using RandomForest by default.")
+        clf = RandomForestClassifier(
+            n_estimators=200,
+            random_state=RND,
+            n_jobs=-1
+        )
 
     # Train
     clf.fit(X_train_sc, y_train)
@@ -225,7 +276,9 @@ def train_dt_display(name, X_train_df, X_test_df, y_train, y_test, features,
             print("Error computing RF importances:", e)
             rf_imp = pd.Series(dtype=float)
         try:
-            _, ig_scores = ig_feature_selection_with_scores(Xtr_fs, y_train, k=min(len(Xtr_fs.columns), top_k_fs))
+            _, ig_scores = ig_feature_selection_with_scores(
+                Xtr_fs, y_train, k=min(len(Xtr_fs.columns), top_k_fs)
+            )
         except Exception as e:
             print("Error computing IG scores:", e)
             ig_scores = pd.Series(dtype=float)
@@ -236,21 +289,40 @@ def train_dt_display(name, X_train_df, X_test_df, y_train, y_test, features,
 
         # Plot comparison
         if not rf_imp.empty and not ig_scores.empty:
-            plot_feature_selection_comparison(rf_imp, ig_scores, top_k=top_k_fs, title_suffix=f"({name})")
+            plot_feature_selection_comparison(
+                rf_imp, ig_scores, top_k=top_k_fs, title_suffix=f"({name})"
+            )
         else:
             if not rf_imp.empty:
-                plt.figure(figsize=(8,6)); rf_imp.head(top_k_fs).sort_values().plot.barh(color='tab:blue'); plt.title(f"RF Feature Importances ({name})"); plt.tight_layout(); plt.show()
+                plt.figure(figsize=(8, 6))
+                rf_imp.head(top_k_fs).sort_values().plot.barh(color='tab:blue')
+                plt.title(f"RF Feature Importances ({name})")
+                plt.tight_layout()
+                plt.show()
             if not ig_scores.empty:
-                plt.figure(figsize=(8,6)); ig_scores.head(top_k_fs).sort_values().plot.barh(color='tab:green'); plt.title(f"IG Scores ({name})"); plt.tight_layout(); plt.show()
+                plt.figure(figsize=(8, 6))
+                ig_scores.head(top_k_fs).sort_values().plot.barh(color='tab:green')
+                plt.title(f"IG Scores ({name})")
+                plt.tight_layout()
+                plt.show()
 
     # Side-by-side plot: Confusion Matrix and ROC
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[0], cbar=False, xticklabels=[0,1], yticklabels=[0,1])
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt='d',
+        cmap='Blues',
+        ax=axes[0],
+        cbar=False,
+        xticklabels=[0, 1],
+        yticklabels=[0, 1]
+    )
     axes[0].set_title(f"Confusion Matrix - {name} ({algo_name})")
     axes[0].set_xlabel("Predicted")
     axes[0].set_ylabel("True")
 
-    axes[1].plot([0,1], [0,1], 'k--', alpha=0.6)
+    axes[1].plot([0, 1], [0, 1], 'k--', alpha=0.6)
     if fpr is not None and tpr is not None:
         axes[1].plot(fpr, tpr, lw=2, label=f"AUC = {roc_auc:.3f}")
     else:
@@ -264,7 +336,18 @@ def train_dt_display(name, X_train_df, X_test_df, y_train, y_test, features,
 
     # Learning curve (accuracy) as a proxy for loss curve
     try:
-        plot_learning_curve_for_model(DecisionTreeClassifier(random_state=RND), X_train_df, y_train, title=f"Learning Curve ({name} - {algo_name})", cv=5, n_jobs=-1)
+        plot_learning_curve_for_model(
+            RandomForestClassifier(
+                n_estimators=200,
+                random_state=RND,
+                n_jobs=-1
+            ),
+            X_train_df,
+            y_train,
+            title=f"Learning Curve ({name} - {algo_name})",
+            cv=5,
+            n_jobs=-1
+        )
     except Exception as e:
         print("Unable to plot learning curve:", e)
 
@@ -273,8 +356,17 @@ def train_dt_display(name, X_train_df, X_test_df, y_train, y_test, features,
         joblib.dump(clf, model_dir / f"{algo_name}_model_{stamp}.joblib")
         joblib.dump(scaler, model_dir / f"scaler_{stamp}.joblib")
         if features is not None:
-            pd.Series(list(features), name="feature").to_csv(model_dir / f"features_{stamp}.csv", index=False)
-        metrics = {"algorithm": algo_name, "accuracy": float(acc), "precision": float(prec), "recall": float(rec), "f1": float(f1v), "auc": float(roc_auc) if roc_auc is not None else None}
+            pd.Series(list(features), name="feature").to_csv(
+                model_dir / f"features_{stamp}.csv", index=False
+            )
+        metrics = {
+            "algorithm": algo_name,
+            "accuracy": float(acc),
+            "precision": float(prec),
+            "recall": float(rec),
+            "f1": float(f1v),
+            "auc": float(roc_auc) if roc_auc is not None else None
+        }
         with open(model_dir / f"metrics_{stamp}.json", "w", encoding="utf8") as f:
             json.dump(metrics, f, indent=2, ensure_ascii=False)
         with open(model_dir / f"classification_report_{stamp}.txt", "w", encoding="utf8") as f:
@@ -289,7 +381,16 @@ def train_dt_display(name, X_train_df, X_test_df, y_train, y_test, features,
         except Exception:
             time.sleep(2)
 
-    return {"config": name, "algorithm": algo_name, "accuracy": acc, "precision": prec, "recall": rec, "f1": f1v, "auc": roc_auc}
+    return {
+        "config": name,
+        "algorithm": algo_name,
+        "accuracy": acc,
+        "precision": prec,
+        "recall": rec,
+        "f1": f1v,
+        "auc": roc_auc
+    }
+
 
 def load_and_prepare(csv_path):
     csv_path = Path(csv_path)
@@ -306,10 +407,12 @@ def load_and_prepare(csv_path):
             raise KeyError("CSV must contain 'Attack Type' or 'Class'.")
         df['Attack Type'] = df['Class'].astype(str).str.strip()
     # Binary label
-    df['Attack_Binary_Label'] = df['Attack Type'].astype(str).str.strip().str.upper().apply(lambda x: 0 if x=="NORMAL" else 1)
+    df['Attack_Binary_Label'] = df['Attack Type'].astype(str).str.strip().str.upper().apply(
+        lambda x: 0 if x == "NORMAL" else 1
+    )
     # One-hot encode object cols except labels
     exclude = {'Class', 'Attack Type', 'Attack_Binary_Label'}
-    obj_cols = [c for c in df.select_dtypes(include=['object','category']).columns if c not in exclude]
+    obj_cols = [c for c in df.select_dtypes(include=['object', 'category']).columns if c not in exclude]
     if obj_cols:
         df = pd.get_dummies(df, columns=obj_cols, drop_first=True)
     # Numeric cleanup
@@ -317,10 +420,11 @@ def load_and_prepare(csv_path):
     if num_cols:
         df[num_cols] = df[num_cols].replace([np.inf, -np.inf], np.nan)
         df[num_cols] = df[num_cols].fillna(df[num_cols].mean())
-    drop_cols = [c for c in ['Class','Attack Type','Attack_Binary_Label'] if c in df.columns]
+    drop_cols = [c for c in ['Class', 'Attack Type', 'Attack_Binary_Label'] if c in df.columns]
     X = df.drop(columns=drop_cols, errors='ignore')
     y = df['Attack_Binary_Label'].astype(int)
     return X, y
+
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
@@ -329,7 +433,11 @@ def main(argv=None):
     parser.add_argument("--k", type=int, default=30, help="Number of features for FS")
     parser.add_argument("--save", action="store_true", help="If set, save artifacts to outdir (default: False)")
     parser.add_argument("--pause", action="store_true", help="Pause between models (press Enter). Default: False")
-    parser.add_argument("--algo", default="DecisionTree", help="Algorithm name label to include in results (default: DecisionTree)")
+    parser.add_argument(
+        "--algo",
+        default="RandomForest",
+        help="Algorithm name label to include in results (default: RandomForest)"
+    )
     args, unknown = parser.parse_known_args(argv)
     if unknown:
         print("Ignored unknown args (likely from Jupyter):", unknown)
@@ -346,42 +454,134 @@ def main(argv=None):
     results = []
 
     # Model 1: Unbalanced full
-    results.append(train_dt_display("Model1_Unbalanced_Full", X_train_raw, X_test_raw, y_train, y_test,
-                                    X_full.columns, algo_name=args.algo, save_outputs=args.save, outdir=args.outdir, pause_between=args.pause))
+    results.append(
+        train_dt_display(
+            "Model1_Unbalanced_Full",
+            X_train_raw,
+            X_test_raw,
+            y_train,
+            y_test,
+            X_full.columns,
+            algo_name=args.algo,
+            save_outputs=args.save,
+            outdir=args.outdir,
+            pause_between=args.pause
+        )
+    )
 
     # Model 2: Unbalanced + RF-FS
     sel2 = rf_feature_selection(X_train_raw, y_train, args.k)
-    results.append(train_dt_display("Model2_Unbalanced_RF-FS", X_train_raw[sel2], X_test_raw[sel2], y_train, y_test,
-                                    sel2, algo_name=args.algo, save_outputs=args.save, outdir=args.outdir, pause_between=args.pause, show_fs_info=True, top_k_fs=args.k))
+    results.append(
+        train_dt_display(
+            "Model2_Unbalanced_RF-FS",
+            X_train_raw[sel2],
+            X_test_raw[sel2],
+            y_train,
+            y_test,
+            sel2,
+            algo_name=args.algo,
+            save_outputs=args.save,
+            outdir=args.outdir,
+            pause_between=args.pause,
+            show_fs_info=True,
+            top_k_fs=args.k
+        )
+    )
 
     # Model 3: Unbalanced + IG-FS
     sel3, ig_scores_full = ig_feature_selection_with_scores(X_train_raw, y_train, k=args.k)
-    results.append(train_dt_display("Model3_Unbalanced_IG-FS", X_train_raw[sel3], X_test_raw[sel3], y_train, y_test,
-                                    sel3, algo_name=args.algo, save_outputs=args.save, outdir=args.outdir, pause_between=args.pause, show_fs_info=True, top_k_fs=args.k))
+    results.append(
+        train_dt_display(
+            "Model3_Unbalanced_IG-FS",
+            X_train_raw[sel3],
+            X_test_raw[sel3],
+            y_train,
+            y_test,
+            sel3,
+            algo_name=args.algo,
+            save_outputs=args.save,
+            outdir=args.outdir,
+            pause_between=args.pause,
+            show_fs_info=True,
+            top_k_fs=args.k
+        )
+    )
 
     # Model 4: SMOTE balanced (full)
     smote = SMOTE(random_state=RND)
     X_train_m4_arr, y_train_m4 = smote.fit_resample(X_train_raw, y_train)
     X_train_m4 = pd.DataFrame(X_train_m4_arr, columns=X_train_raw.columns)
-    results.append(train_dt_display("Model4_SMOTE_Full", X_train_m4, X_test_raw, y_train_m4, y_test,
-                                    X_full.columns, algo_name=args.algo, save_outputs=args.save, outdir=args.outdir, pause_between=args.pause))
+    results.append(
+        train_dt_display(
+            "Model4_SMOTE_Full",
+            X_train_m4,
+            X_test_raw,
+            y_train_m4,
+            y_test,
+            X_full.columns,
+            algo_name=args.algo,
+            save_outputs=args.save,
+            outdir=args.outdir,
+            pause_between=args.pause
+        )
+    )
 
     # Model 5: SMOTE + RF-FS
     sel5 = rf_feature_selection(X_train_m4, y_train_m4, args.k)
-    results.append(train_dt_display("Model5_SMOTE_RF-FS", X_train_m4[sel5], X_test_raw[sel5], y_train_m4, y_test,
-                                    sel5, algo_name=args.algo, save_outputs=args.save, outdir=args.outdir, pause_between=args.pause, show_fs_info=True, top_k_fs=args.k))
+    results.append(
+        train_dt_display(
+            "Model5_SMOTE_RF-FS",
+            X_train_m4[sel5],
+            X_test_raw[sel5],
+            y_train_m4,
+            y_test,
+            sel5,
+            algo_name=args.algo,
+            save_outputs=args.save,
+            outdir=args.outdir,
+            pause_between=args.pause,
+            show_fs_info=True,
+            top_k_fs=args.k
+        )
+    )
 
     # Model 6: SMOTE + IG-FS
     sel6, ig_scores_m4 = ig_feature_selection_with_scores(X_train_m4, y_train_m4, k=args.k)
-    results.append(train_dt_display("Model6_SMOTE_IG-FS", X_train_m4[sel6], X_test_raw[sel6], y_train_m4, y_test,
-                                    sel6, algo_name=args.algo, save_outputs=args.save, outdir=args.outdir, pause_between=args.pause, show_fs_info=True, top_k_fs=args.k))
+    results.append(
+        train_dt_display(
+            "Model6_SMOTE_IG-FS",
+            X_train_m4[sel6],
+            X_test_raw[sel6],
+            y_train_m4,
+            y_test,
+            sel6,
+            algo_name=args.algo,
+            save_outputs=args.save,
+            outdir=args.outdir,
+            pause_between=args.pause,
+            show_fs_info=True,
+            top_k_fs=args.k
+        )
+    )
 
     # Model 7: SMOTE-Tomek balanced (full)
     smt = SMOTETomek(random_state=RND)
     X_train_m7_arr, y_train_m7 = smt.fit_resample(X_train_raw, y_train)
     X_train_m7 = pd.DataFrame(X_train_m7_arr, columns=X_train_raw.columns)
-    results.append(train_dt_display("Model7_SMOTETomek_Full", X_train_m7, X_test_raw, y_train_m7, y_test,
-                                    X_full.columns, algo_name=args.algo, save_outputs=args.save, outdir=args.outdir, pause_between=args.pause))
+    results.append(
+        train_dt_display(
+            "Model7_SMOTETomek_Full",
+            X_train_m7,
+            X_test_raw,
+            y_train_m7,
+            y_test,
+            X_full.columns,
+            algo_name=args.algo,
+            save_outputs=args.save,
+            outdir=args.outdir,
+            pause_between=args.pause
+        )
+    )
 
     # Summary of all 7 models (includes algorithm column)
     results_df = pd.DataFrame(results)
@@ -393,6 +593,7 @@ def main(argv=None):
         summary_path = Path(args.outdir) / f"summary_7models_{args.algo}_{timestamp()}.csv"
         results_df.to_csv(summary_path, index=False)
         print("Saved summary to:", summary_path)
+
 
 if __name__ == "__main__":
     main()
