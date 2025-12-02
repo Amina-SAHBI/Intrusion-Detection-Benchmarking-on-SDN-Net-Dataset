@@ -57,6 +57,7 @@ from sklearn.metrics import (
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectKBest, mutual_info_classif
 from sklearn.naive_bayes import GaussianNB
+from sklearn.utils.class_weight import compute_class_weight
 
 from imblearn.over_sampling import SMOTE
 from imblearn.combine import SMOTETomek
@@ -73,65 +74,31 @@ def ensure_dir(d):
     Path(d).mkdir(parents=True, exist_ok=True)
 
 
-def safe_map_attack_type(series):
-    attacks_types = {
-        'NORMAL': 'normal',
-        'DOS': 'attack',
-        'DDOS': 'attack',
-        'WEB ATTACK � BRUTE FORCE': 'attack',
-        'WEB ATTACK � XSS': 'attack',
-        'WEB ATTACK � SQL INJECTION': 'attack',
-        'WEB-ATTACK': 'attack',
-        'U2R': 'attack',
-        'PROBE': 'attack',
-        'BFA': 'attack',
-        'BOTNET': 'attack',
-    }
-    attacks_map = {str(k).strip().upper(): v for k, v in attacks_types.items()}
-    normalized = series.astype(str).str.strip().str.upper()
-    mapped = normalized.map(attacks_map).fillna('attack')
-    return mapped
-
-
 def rf_feature_importances(X_train, y_train):
-    """Random Forest-based feature importance used for RF-FS variants."""
     rf = RandomForestClassifier(n_estimators=200, random_state=RND, n_jobs=-1)
     rf.fit(X_train, y_train)
     importances = pd.Series(rf.feature_importances_, index=X_train.columns)
-    importances = importances.sort_values(ascending=False)
-    return importances
+    return importances.sort_values(ascending=False)
 
 
 def rf_feature_selection(X_train, y_train, k):
     importances = rf_feature_importances(X_train, y_train)
-    selected = list(importances.index[:k])
-    return selected
+    return list(importances.index[:k])
 
 
 def ig_feature_selection_with_scores(X_train, y_train, k):
     selector = SelectKBest(score_func=mutual_info_classif, k=k)
     selector.fit(X_train, y_train)
     scores = pd.Series(selector.scores_, index=X_train.columns).sort_values(ascending=False)
-    selected = list(scores.index[:k])
-    return selected, scores
+    return list(scores.index[:k]), scores
 
 
 def plot_feature_selection_comparison(rf_imp, ig_scores, top_k=20, title_suffix=""):
-    """
-    rf_imp: pd.Series of RF importances indexed by feature name (sorted desc).
-    ig_scores: pd.Series of mutual_info scores indexed by feature name.
-    Plots side-by-side horizontal bar charts of top_k features for RF and IG,
-    plus overlap information.
-    """
     rf_imp = rf_imp.sort_values(ascending=False)
     ig_scores = ig_scores.sort_values(ascending=False)
 
     rf_top = rf_imp.head(top_k)
     ig_top = ig_scores.head(top_k)
-
-    rf_set = set(rf_top.index)
-    ig_set = set(ig_top.index)
-    overlap = rf_set & ig_set
 
     fig, axes = plt.subplots(1, 2, figsize=(16, 7))
     rf_top.sort_values().plot.barh(ax=axes[0], color='tab:blue')
@@ -145,6 +112,9 @@ def plot_feature_selection_comparison(rf_imp, ig_scores, top_k=20, title_suffix=
     plt.tight_layout()
     plt.show()
 
+    rf_set = set(rf_top.index)
+    ig_set = set(ig_top.index)
+    overlap = rf_set & ig_set
     print(f"Top {top_k} RF features count: {len(rf_top)}; Top {top_k} IG features count: {len(ig_top)}")
     print(f"Overlap count: {len(overlap)}")
     if overlap:
@@ -156,10 +126,6 @@ def plot_feature_selection_comparison(rf_imp, ig_scores, top_k=20, title_suffix=
 
 def plot_learning_curve_for_model(estimator, X, y, title="Learning Curve", cv=5, n_jobs=1,
                                   train_sizes=np.linspace(0.1, 1.0, 5)):
-    """
-    Plot learning curve (train and cross-validation score) for estimator on data X, y.
-    Uses accuracy as scoring.
-    """
     plt.figure(figsize=(8, 6))
     train_sizes, train_scores, val_scores = learning_curve(
         estimator, X, y, cv=cv, scoring='accuracy',
@@ -191,6 +157,7 @@ def train_gnb_display(
     y_test,
     features,
     algo_name="GaussianNB",
+    use_sample_weight=False,
     save_outputs=False,
     outdir="outputs",
     pause_between=False,
@@ -198,37 +165,69 @@ def train_gnb_display(
     top_k_fs=20
 ):
     """
-    Train classifier (Gaussian Naive Bayes by default), display classification
-    report, confusion matrix and ROC inline.
-
-    algo_name: string to display and include in results (e.g. 'GaussianNB')
-    show_fs_info: if True and features provided, show feature selection info
-                  (RF importances vs IG).
-    top_k_fs: number of features to show in FS comparison.
+    Train GaussianNB model and show metrics/plots. Optional sample weighting to
+    mitigate class imbalance (computed from class frequencies).
     """
     stamp = timestamp()
     model_dir = Path(outdir) / f"{name.replace(' ', '_')}_{stamp}"
     if save_outputs:
         ensure_dir(model_dir)
 
-    # Scale features (kept for consistency with other scripts)
+    # Ensure DataFrame inputs
+    if not isinstance(X_train_df, pd.DataFrame):
+        X_train_df = pd.DataFrame(X_train_df, columns=features)
+    if not isinstance(X_test_df, pd.DataFrame):
+        X_test_df = pd.DataFrame(X_test_df, columns=features)
+
+    # Feature selection info if requested
+    if show_fs_info and isinstance(features, (list, pd.Index, np.ndarray)):
+        Xtr_fs = X_train_df.copy()
+        try:
+            rf_imp = rf_feature_importances(Xtr_fs, y_train)
+        except Exception as e:
+            print("Error computing RF importances:", e)
+            rf_imp = pd.Series(dtype=float)
+        try:
+            _, ig_scores = ig_feature_selection_with_scores(Xtr_fs, y_train, k=min(len(Xtr_fs.columns), top_k_fs))
+        except Exception as e:
+            print("Error computing IG scores:", e)
+            ig_scores = pd.Series(dtype=float)
+
+        print("\nSelected features used for training (first 100 shown):")
+        print(list(features)[:100])
+
+        if not rf_imp.empty and not ig_scores.empty:
+            plot_feature_selection_comparison(rf_imp, ig_scores, top_k=top_k_fs, title_suffix=f"({name})")
+
+    # Scale features
     scaler = StandardScaler()
     X_train_sc = scaler.fit_transform(X_train_df)
     X_test_sc = scaler.transform(X_test_df)
 
-    # Select classifier according to algo_name (GaussianNB-based)
-    if algo_name.lower() in ("gaussiannb", "gaussian_nb", "gnb"):
-        clf = GaussianNB()
-    else:
-        # Fallback: GaussianNB if unknown
-        print(f"Algo '{algo_name}' not recognized; using GaussianNB by default.")
-        clf = GaussianNB()
+    # Optionally compute sample weights from class balance
+    sample_weight = None
+    if use_sample_weight:
+        try:
+            classes = np.unique(y_train)
+            cw = compute_class_weight(class_weight='balanced', classes=classes, y=y_train)
+            cw_map = {int(c): float(w) for c, w in zip(classes, cw)}
+            sample_weight = np.array([cw_map[int(lbl)] for lbl in y_train])
+        except Exception:
+            sample_weight = None
 
-    # Train
-    clf.fit(X_train_sc, y_train)
+    # Instantiate classifier
+    clf = GaussianNB()
+
+    # Fit with or without sample_weight
+    if sample_weight is not None:
+        clf.fit(X_train_sc, y_train, sample_weight=sample_weight)
+    else:
+        clf.fit(X_train_sc, y_train)
+
+    # Predict
     y_pred = clf.predict(X_test_sc)
 
-    # Score for ROC
+    # Score for ROC/AUC
     score_for_roc = None
     if hasattr(clf, "predict_proba"):
         try:
@@ -241,7 +240,7 @@ def train_gnb_display(
         except Exception:
             score_for_roc = None
     if score_for_roc is None:
-        score_for_roc = y_pred
+        score_for_roc = y_pred  # fallback
 
     # Metrics
     acc = accuracy_score(y_test, y_pred)
@@ -258,65 +257,16 @@ def train_gnb_display(
     except Exception:
         fpr, tpr, roc_auc = None, None, None
 
-    # Print and display
+    # Print
     print(f"\n=== {name} ({algo_name}) ===")
     print(f"Accuracy: {acc:.4f}  Precision: {prec:.4f}  Recall: {rec:.4f}  F1: {f1v:.4f}  AUC: {roc_auc if roc_auc is not None else 'N/A'}")
     print("\nClassification report:\n", report)
 
-    # Feature selection info for FS variants
-    if show_fs_info and isinstance(features, (list, pd.Index, np.ndarray)):
-        Xtr_fs = X_train_df.copy()
-        try:
-            rf_imp = rf_feature_importances(Xtr_fs, y_train)
-        except Exception as e:
-            print("Error computing RF importances:", e)
-            rf_imp = pd.Series(dtype=float)
-        try:
-            _, ig_scores = ig_feature_selection_with_scores(
-                Xtr_fs, y_train, k=min(len(Xtr_fs.columns), top_k_fs)
-            )
-        except Exception as e:
-            print("Error computing IG scores:", e)
-            ig_scores = pd.Series(dtype=float)
-
-        # Print selected features (the ones used for training)
-        print("\nSelected features used for training (first 100 shown):")
-        print(list(features)[:100])
-
-        # Plot comparison
-        if not rf_imp.empty and not ig_scores.empty:
-            plot_feature_selection_comparison(
-                rf_imp, ig_scores, top_k=top_k_fs, title_suffix=f"({name})"
-            )
-        else:
-            if not rf_imp.empty:
-                plt.figure(figsize=(8, 6))
-                rf_imp.head(top_k_fs).sort_values().plot.barh(color='tab:blue')
-                plt.title(f"RF Feature Importances ({name})")
-                plt.tight_layout()
-                plt.show()
-            if not ig_scores.empty:
-                plt.figure(figsize=(8, 6))
-                ig_scores.head(top_k_fs).sort_values().plot.barh(color='tab:green')
-                plt.title(f"IG Scores ({name})")
-                plt.tight_layout()
-                plt.show()
-
-    # Side-by-side plot: Confusion Matrix and ROC
+    # Plots: confusion + ROC
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    sns.heatmap(
-        cm,
-        annot=True,
-        fmt='d',
-        cmap='Blues',
-        ax=axes[0],
-        cbar=False,
-        xticklabels=[0, 1],
-        yticklabels=[0, 1]
-    )
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[0], cbar=False, xticklabels=[0, 1], yticklabels=[0, 1])
     axes[0].set_title(f"Confusion Matrix - {name} ({algo_name})")
-    axes[0].set_xlabel("Predicted")
-    axes[0].set_ylabel("True")
+    axes[0].set_xlabel("Predicted"); axes[0].set_ylabel("True")
 
     axes[1].plot([0, 1], [0, 1], 'k--', alpha=0.6)
     if fpr is not None and tpr is not None:
@@ -324,49 +274,57 @@ def train_gnb_display(
     else:
         axes[1].text(0.5, 0.5, 'ROC N/A', ha='center')
     axes[1].set_title(f"ROC Curve - {name} ({algo_name})")
-    axes[1].set_xlabel("False Positive Rate")
-    axes[1].set_ylabel("True Positive Rate")
+    axes[1].set_xlabel("False Positive Rate"); axes[1].set_ylabel("True Positive Rate")
     axes[1].legend(loc='lower right')
-    plt.tight_layout()
-    plt.show()
+    plt.tight_layout(); plt.show()
 
-    # Learning curve (accuracy) as a proxy for loss curve
+    # Learning curve
     try:
-        plot_learning_curve_for_model(
-            GaussianNB(),
-            X_train_df,
-            y_train,
-            title=f"Learning Curve ({name} - {algo_name})",
-            cv=5,
-            n_jobs=-1
-        )
+        plot_learning_curve_for_model(GaussianNB(), X_train_df, y_train, title=f"Learning Curve ({name} - {algo_name})", cv=5, n_jobs=-1)
     except Exception as e:
         print("Unable to plot learning curve:", e)
 
-    # Optionally save artifacts
+    # Save artifacts
     if save_outputs:
-        joblib.dump(clf, model_dir / f"{algo_name}_model_{stamp}.joblib")
-        joblib.dump(scaler, model_dir / f"scaler_{stamp}.joblib")
+        try:
+            joblib.dump(clf, model_dir / f"{algo_name}_model_{stamp}.joblib")
+        except Exception:
+            pass
+        try:
+            joblib.dump(scaler, model_dir / f"scaler_{stamp}.joblib")
+        except Exception:
+            pass
         if features is not None:
-            pd.Series(list(features), name="feature").to_csv(
-                model_dir / f"features_{stamp}.csv", index=False
-            )
+            pd.Series(list(features), name="feature").to_csv(model_dir / f"features_{stamp}.csv", index=False)
+
+        auc_value = None
+        try:
+            if roc_auc is not None and not (isinstance(roc_auc, float) and np.isnan(roc_auc)):
+                auc_value = float(roc_auc)
+        except Exception:
+            auc_value = None
+
         metrics = {
             "algorithm": algo_name,
+            "use_sample_weight": bool(use_sample_weight),
             "accuracy": float(acc),
             "precision": float(prec),
             "recall": float(rec),
             "f1": float(f1v),
-            "auc": float(roc_auc) if roc_auc is not None else None
+            "auc": auc_value
         }
         with open(model_dir / f"metrics_{stamp}.json", "w", encoding="utf8") as f:
             json.dump(metrics, f, indent=2, ensure_ascii=False)
+
         with open(model_dir / f"classification_report_{stamp}.txt", "w", encoding="utf8") as f:
             f.write(report)
-        fig.savefig(model_dir / f"confusion_roc_{stamp}.png", dpi=150)
-        plt.close(fig)
 
-    # Pause option useful in notebooks
+        try:
+            fig.savefig(model_dir / f"confusion_roc_{stamp}.png", dpi=150)
+            plt.close(fig)
+        except Exception:
+            pass
+
     if pause_between:
         try:
             input("Press Enter to continue to next model...")
@@ -376,6 +334,7 @@ def train_gnb_display(
     return {
         "config": name,
         "algorithm": algo_name,
+        "use_sample_weight": bool(use_sample_weight),
         "accuracy": acc,
         "precision": prec,
         "recall": rec,
@@ -425,6 +384,7 @@ def main(argv=None):
     parser.add_argument("--k", type=int, default=30, help="Number of features for FS")
     parser.add_argument("--save", action="store_true", help="If set, save artifacts to outdir (default: False)")
     parser.add_argument("--pause", action="store_true", help="Pause between models (press Enter). Default: False")
+    parser.add_argument("--use_sample_weight", action="store_true", help="Compute sample_weight from class balance and pass to fit")
     parser.add_argument(
         "--algo",
         default="GaussianNB",
@@ -455,6 +415,7 @@ def main(argv=None):
             y_test,
             X_full.columns,
             algo_name=args.algo,
+            use_sample_weight=args.use_sample_weight,
             save_outputs=args.save,
             outdir=args.outdir,
             pause_between=args.pause
@@ -472,6 +433,7 @@ def main(argv=None):
             y_test,
             sel2,
             algo_name=args.algo,
+            use_sample_weight=args.use_sample_weight,
             save_outputs=args.save,
             outdir=args.outdir,
             pause_between=args.pause,
@@ -491,6 +453,7 @@ def main(argv=None):
             y_test,
             sel3,
             algo_name=args.algo,
+            use_sample_weight=args.use_sample_weight,
             save_outputs=args.save,
             outdir=args.outdir,
             pause_between=args.pause,
@@ -512,6 +475,7 @@ def main(argv=None):
             y_test,
             X_full.columns,
             algo_name=args.algo,
+            use_sample_weight=args.use_sample_weight,
             save_outputs=args.save,
             outdir=args.outdir,
             pause_between=args.pause
@@ -529,6 +493,7 @@ def main(argv=None):
             y_test,
             sel5,
             algo_name=args.algo,
+            use_sample_weight=args.use_sample_weight,
             save_outputs=args.save,
             outdir=args.outdir,
             pause_between=args.pause,
@@ -548,6 +513,7 @@ def main(argv=None):
             y_test,
             sel6,
             algo_name=args.algo,
+            use_sample_weight=args.use_sample_weight,
             save_outputs=args.save,
             outdir=args.outdir,
             pause_between=args.pause,
@@ -569,6 +535,7 @@ def main(argv=None):
             y_test,
             X_full.columns,
             algo_name=args.algo,
+            use_sample_weight=args.use_sample_weight,
             save_outputs=args.save,
             outdir=args.outdir,
             pause_between=args.pause
